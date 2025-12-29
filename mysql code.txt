@@ -1,0 +1,1000 @@
+Setting environment for using XAMPP for Windows.
+Adittya Kumar@ADITTYA-KUMAR c:\xampp
+# mysql -u root -p
+Enter password:
+Welcome to the MariaDB monitor.  Commands end with ; or \g.
+Your MariaDB connection id is 8
+Server version: 10.4.32-MariaDB mariadb.org binary distribution
+
+Copyright (c) 2000, 2018, Oracle, MariaDB Corporation Ab and others.
+
+Type 'help;' or '\h' for help. Type '\c' to clear the current input statement.
+
+MariaDB [(none)]> -- --------------------------------------------------------
+MariaDB [(none)]> -- 1. DATABASE SETUP
+MariaDB [(none)]> -- --------------------------------------------------------
+MariaDB [(none)]> DROP DATABASE IF EXISTS Poricchonota;
+Query OK, 0 rows affected, 1 warning (0.000 sec)
+
+MariaDB [(none)]> CREATE DATABASE Poricchonota;
+Query OK, 1 row affected (0.001 sec)
+
+MariaDB [(none)]> USE Poricchonota;
+Database changed
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- --------------------------------------------------------
+MariaDB [Poricchonota]> -- 2. CORE STRUCTURES (Departments & Categories)
+MariaDB [Poricchonota]> -- --------------------------------------------------------
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- Table: Department
+MariaDB [Poricchonota]> -- Represents organizations (WASA, DNCC, Titas Gas, etc.)
+MariaDB [Poricchonota]> CREATE TABLE Department (
+    ->     dept_id INT AUTO_INCREMENT PRIMARY KEY,
+    ->     name VARCHAR(100) NOT NULL UNIQUE,
+    ->     contact VARCHAR(50),
+    ->     off_address TEXT,
+    ->     short_code VARCHAR(20) UNIQUE -- e.g. 'WASA', 'DNCC'
+    -> );
+Query OK, 0 rows affected (0.019 sec)
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- Table: Complaint_category
+MariaDB [Poricchonota]> -- Represents issue types (Water Leak, Garbage) linked to a specific Department
+MariaDB [Poricchonota]> CREATE TABLE Complaint_category (
+    ->     category_id INT AUTO_INCREMENT PRIMARY KEY,
+    ->     name VARCHAR(100) NOT NULL,
+    ->     default_SLA INT DEFAULT 24, -- Hours allowed to fix
+    ->     description TEXT,
+    ->     Ddept_id INT NOT NULL, -- The department responsible for this category
+    ->     FOREIGN KEY (Ddept_id) REFERENCES Department(dept_id) ON DELETE CASCADE
+    -> );
+Query OK, 0 rows affected (0.017 sec)
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- --------------------------------------------------------
+MariaDB [Poricchonota]> -- 3. USER HIERARCHY (Login & Roles)
+MariaDB [Poricchonota]> -- --------------------------------------------------------
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- Table: USER
+MariaDB [Poricchonota]> -- Base table for ALL accounts (Citizens, Admins, Engineers)
+MariaDB [Poricchonota]> -- Stores common login info
+MariaDB [Poricchonota]> CREATE TABLE USER (
+    ->     user_id INT AUTO_INCREMENT PRIMARY KEY,
+    ->     name VARCHAR(100) NOT NULL,
+    ->     email VARCHAR(150) NOT NULL UNIQUE,
+    ->     password VARCHAR(255) NOT NULL, -- Store hashed passwords here
+    ->     phone VARCHAR(20),
+    ->     role ENUM('citizen', 'admin', 'engineer') NOT NULL,
+    ->     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    -> );
+Query OK, 0 rows affected (0.017 sec)
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- Table: citizen
+MariaDB [Poricchonota]> -- Specific data for Citizens
+MariaDB [Poricchonota]> -- IMPORTANT: PK is 'nid', but it links to 'user_id' for login
+MariaDB [Poricchonota]> CREATE TABLE citizen (
+    ->     nid VARCHAR(50) PRIMARY KEY, -- National ID is the main identifier for reports
+    ->     user_id INT NOT NULL UNIQUE,
+    ->     city VARCHAR(100),
+    ->     address TEXT,
+    ->     FOREIGN KEY (user_id) REFERENCES USER(user_id) ON DELETE CASCADE
+    -> );
+Query OK, 0 rows affected (0.017 sec)
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- Table: Staff
+MariaDB [Poricchonota]> -- Intermediate table for Employees (Admins & Engineers)
+MariaDB [Poricchonota]> -- Tracks join date or internal ID
+MariaDB [Poricchonota]> CREATE TABLE Staff (
+    ->     user_id INT PRIMARY KEY,
+    ->     joined_at DATE,
+    ->     FOREIGN KEY (user_id) REFERENCES USER(user_id) ON DELETE CASCADE
+    -> );
+Query OK, 0 rows affected (0.005 sec)
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- Table: Engineer
+MariaDB [Poricchonota]> -- Extends Staff. Linked to a Department.
+MariaDB [Poricchonota]> -- Can only be assigned complaints for their specific dept.
+MariaDB [Poricchonota]> CREATE TABLE Engineer (
+    ->     user_id INT PRIMARY KEY,
+    ->     dept_id INT NOT NULL,
+    ->     is_active TINYINT(1) DEFAULT 1,
+    ->     FOREIGN KEY (user_id) REFERENCES Staff(user_id) ON DELETE CASCADE,
+    ->     FOREIGN KEY (dept_id) REFERENCES Department(dept_id) ON DELETE CASCADE
+    -> );
+Query OK, 0 rows affected (0.017 sec)
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- Table: ADMIN
+MariaDB [Poricchonota]> -- Extends Staff. Linked to a Department.
+MariaDB [Poricchonota]> -- "An admin of WASA will only assign engineers... related to WASA"
+MariaDB [Poricchonota]> CREATE TABLE ADMIN (
+    ->     user_id INT PRIMARY KEY,
+    ->     dept_id INT NOT NULL,
+    ->     FOREIGN KEY (user_id) REFERENCES Staff(user_id) ON DELETE CASCADE,
+    ->     FOREIGN KEY (dept_id) REFERENCES Department(dept_id) ON DELETE CASCADE
+    -> );
+Query OK, 0 rows affected (0.024 sec)
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- --------------------------------------------------------
+MariaDB [Poricchonota]> -- 4. COMPLAINT MANAGEMENT
+MariaDB [Poricchonota]> -- --------------------------------------------------------
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- Table: Complaint
+MariaDB [Poricchonota]> -- The main ticket. Links Citizen (NID) to Department and optionally an Engineer.
+MariaDB [Poricchonota]> CREATE TABLE Complaint (
+    ->     Complaint_id INT AUTO_INCREMENT PRIMARY KEY,
+    ->     nid VARCHAR(50) NOT NULL, -- Who filed it (Citizen NID)
+    ->     C_category_id INT NOT NULL, -- What is the problem type
+    ->     de_dept_id INT NOT NULL, -- Which dept is responsible
+    ->     assigned_engineer_id INT NULL, -- Starts NULL, Admin updates this later
+    ->
+    ->     title VARCHAR(150) NOT NULL,
+    ->     description TEXT NOT NULL,
+    ->     location_text TEXT NOT NULL,
+    ->     before_photo VARCHAR(255), -- Path to uploaded image
+    ->
+    ->     status ENUM('REPORTED', 'ASSIGNED', 'IN_PROGRESS', 'RESOLVED', 'CLOSED', 'REJECTED') DEFAULT 'REPORTED',
+    ->
+    ->     reported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    ->     deadline DATETIME, -- Calculated in PHP (reported_at + SLA)
+    ->
+    ->     FOREIGN KEY (nid) REFERENCES citizen(nid) ON DELETE CASCADE,
+    ->     FOREIGN KEY (C_category_id) REFERENCES Complaint_category(category_id),
+    ->     FOREIGN KEY (de_dept_id) REFERENCES Department(dept_id),
+    ->     FOREIGN KEY (assigned_engineer_id) REFERENCES USER(user_id) ON DELETE SET NULL
+    -> );
+Query OK, 0 rows affected (0.016 sec)
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- Table: Complaint_update
+MariaDB [Poricchonota]> -- Tracks the timeline: "Status changed from X to Y by User Z"
+MariaDB [Poricchonota]> CREATE TABLE Complaint_update (
+    ->     Update_ID INT AUTO_INCREMENT PRIMARY KEY,
+    ->     Complaint_id INT NOT NULL,
+    ->     user_id INT NOT NULL, -- Who made the update (Admin or Engineer)
+    ->
+    ->     old_status VARCHAR(50),
+    ->     new_status VARCHAR(50),
+    ->     comment TEXT,
+    ->     photo_path VARCHAR(255) NULL, -- Optional "After" photo for resolution proof
+    ->
+    ->     Created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    ->
+    ->     FOREIGN KEY (Complaint_id) REFERENCES Complaint(Complaint_id) ON DELETE CASCADE,
+    ->     FOREIGN KEY (user_id) REFERENCES USER(user_id)
+    -> );
+Query OK, 0 rows affected (0.024 sec)
+
+MariaDB [Poricchonota]> DROP DATABASE IF EXISTS Poricchonota;
+Query OK, 9 rows affected (0.089 sec)
+
+MariaDB [(none)]> CREATE DATABASE Poricchonota;
+Query OK, 1 row affected (0.002 sec)
+
+MariaDB [(none)]> USE Poricchonota;
+Database changed
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 1. Departments
+MariaDB [Poricchonota]> CREATE TABLE Department (
+    ->     dept_id INT AUTO_INCREMENT PRIMARY KEY,
+    ->     name VARCHAR(100) NOT NULL UNIQUE,
+    ->     contact VARCHAR(50),
+    ->     off_address TEXT,
+    ->     short_code VARCHAR(20) UNIQUE
+    -> );
+Query OK, 0 rows affected (0.029 sec)
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 2. Complaint Categories
+MariaDB [Poricchonota]> CREATE TABLE Complaint_category (
+    ->     category_id INT AUTO_INCREMENT PRIMARY KEY,
+    ->     name VARCHAR(100) NOT NULL,
+    ->     default_SLA INT DEFAULT 24,
+    ->     description TEXT,
+    ->     Ddept_id INT NOT NULL,
+    ->     FOREIGN KEY (Ddept_id) REFERENCES Department(dept_id) ON DELETE CASCADE
+    -> );
+Query OK, 0 rows affected (0.019 sec)
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 3. USER (Updated: Now includes NID)
+MariaDB [Poricchonota]> CREATE TABLE USER (
+    ->     user_id INT AUTO_INCREMENT PRIMARY KEY, -- Auto-generated Unique ID
+    ->     nid VARCHAR(50) NOT NULL UNIQUE,        -- Mandatory for EVERYONE
+    ->     name VARCHAR(100) NOT NULL,
+    ->     email VARCHAR(150) NOT NULL UNIQUE,
+    ->     password VARCHAR(255) NOT NULL,
+    ->     phone VARCHAR(20),
+    ->     role ENUM('citizen', 'admin', 'engineer') NOT NULL,
+    ->     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    -> );
+Query OK, 0 rows affected (0.023 sec)
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 4. Citizen (Simplified: Links via user_id)
+MariaDB [Poricchonota]> CREATE TABLE citizen (
+    ->     user_id INT PRIMARY KEY, -- Links directly to USER
+    ->     city VARCHAR(100),
+    ->     address TEXT,
+    ->     FOREIGN KEY (user_id) REFERENCES USER(user_id) ON DELETE CASCADE
+    -> );
+Query OK, 0 rows affected (0.007 sec)
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 5. Staff (Admins & Engineers)
+MariaDB [Poricchonota]> CREATE TABLE Staff (
+    ->     user_id INT PRIMARY KEY,
+    ->     joined_at DATE,
+    ->     FOREIGN KEY (user_id) REFERENCES USER(user_id) ON DELETE CASCADE
+    -> );
+Query OK, 0 rows affected (0.006 sec)
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 6. Engineer
+MariaDB [Poricchonota]> CREATE TABLE Engineer (
+    ->     user_id INT PRIMARY KEY,
+    ->     dept_id INT NOT NULL,
+    ->     is_active TINYINT(1) DEFAULT 1,
+    ->     FOREIGN KEY (user_id) REFERENCES Staff(user_id) ON DELETE CASCADE,
+    ->     FOREIGN KEY (dept_id) REFERENCES Department(dept_id) ON DELETE CASCADE
+    -> );
+Query OK, 0 rows affected (0.021 sec)
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 7. ADMIN
+MariaDB [Poricchonota]> CREATE TABLE ADMIN (
+    ->     user_id INT PRIMARY KEY,
+    ->     dept_id INT NOT NULL,
+    ->     FOREIGN KEY (user_id) REFERENCES Staff(user_id) ON DELETE CASCADE,
+    ->     FOREIGN KEY (dept_id) REFERENCES Department(dept_id) ON DELETE CASCADE
+    -> );
+Query OK, 0 rows affected (0.017 sec)
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 8. Complaint (Updated: Links to user_id now)
+MariaDB [Poricchonota]> CREATE TABLE Complaint (
+    ->     Complaint_id INT AUTO_INCREMENT PRIMARY KEY,
+    ->     user_id INT NOT NULL, -- Link to the User ID (Citizen)
+    ->     C_category_id INT NOT NULL,
+    ->     de_dept_id INT NOT NULL,
+    ->     assigned_engineer_id INT NULL,
+    ->
+    ->     title VARCHAR(150) NOT NULL,
+    ->     description TEXT NOT NULL,
+    ->     location_text TEXT NOT NULL,
+    ->     before_photo VARCHAR(255),
+    ->
+    ->     status ENUM('REPORTED', 'ASSIGNED', 'IN_PROGRESS', 'RESOLVED', 'CLOSED', 'REJECTED') DEFAULT 'REPORTED',
+    ->
+    ->     reported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    ->     deadline DATETIME,
+    ->
+    ->     FOREIGN KEY (user_id) REFERENCES USER(user_id) ON DELETE CASCADE,
+    ->     FOREIGN KEY (C_category_id) REFERENCES Complaint_category(category_id),
+    ->     FOREIGN KEY (de_dept_id) REFERENCES Department(dept_id),
+    ->     FOREIGN KEY (assigned_engineer_id) REFERENCES USER(user_id) ON DELETE SET NULL
+    -> );
+Query OK, 0 rows affected (0.022 sec)
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 9. Complaint Updates
+MariaDB [Poricchonota]> CREATE TABLE Complaint_update (
+    ->     Update_ID INT AUTO_INCREMENT PRIMARY KEY,
+    ->     Complaint_id INT NOT NULL,
+    ->     user_id INT NOT NULL,
+    ->     old_status VARCHAR(50),
+    ->     new_status VARCHAR(50),
+    ->     comment TEXT,
+    ->     photo_path VARCHAR(255) NULL,
+    ->     Created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    ->     FOREIGN KEY (Complaint_id) REFERENCES Complaint(Complaint_id) ON DELETE CASCADE,
+    ->     FOREIGN KEY (user_id) REFERENCES USER(user_id)
+    -> );
+Query OK, 0 rows affected (0.025 sec)
+
+MariaDB [Poricchonota]> USE Poricchonota;
+Database changed
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 1. Create the Organizations (Departments)
+MariaDB [Poricchonota]> -- This allows you to select "WASA" or "DNCC" when creating a staff account.
+MariaDB [Poricchonota]> INSERT INTO Department (name, short_code, contact, off_address) VALUES
+    -> ('Dhaka North City Corporation', 'DNCC', '16106', 'Gulshan-2, Dhaka'),
+    -> ('Dhaka South City Corporation', 'DSCC', '09611100097', 'Nagar Bhaban, Dhaka'),
+    -> ('Dhaka WASA', 'WASA', '16162', 'Kawran Bazar, Dhaka'),
+    -> ('Titas Gas', 'TITAS', '16496', 'Kazi Nazrul Islam Ave, Dhaka'),
+    -> ('DESCO', 'DESCO', '16120', 'Nikunja-2, Dhaka');
+Query OK, 5 rows affected (0.027 sec)
+Records: 5  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]> ALTER TABLE Complaint
+    -> ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+Query OK, 0 rows affected (0.049 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]> USE Poricchonota;
+Database changed
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- Add the missing Foreign Key column 'cat_id'
+MariaDB [Poricchonota]> ALTER TABLE Complaint
+    -> ADD COLUMN cat_id INT,
+    -> ADD CONSTRAINT fk_complaint_category
+    -> FOREIGN KEY (cat_id) REFERENCES Complaint_category(cat_id);
+ERROR 1005 (HY000): Can't create table `poricchonota`.`complaint` (errno: 150 "Foreign key constraint is incorrectly formed")
+MariaDB [Poricchonota]> ALTER TABLE Complaint
+    -> ADD COLUMN cat_id INT UNSIGNED,
+    -> ADD CONSTRAINT fk_complaint_category
+    -> FOREIGN KEY (cat_id) REFERENCES Complaint_category(cat_id);
+ERROR 1005 (HY000): Can't create table `poricchonota`.`complaint` (errno: 150 "Foreign key constraint is incorrectly formed")
+MariaDB [Poricchonota]> ALTER TABLE Complaint
+    -> ADD COLUMN cat_id INT UNSIGNED,
+    -> ADD CONSTRAINT fk_complaint_category
+    -> FOREIGN KEY (cat_id) REFERENCES Complaint_category(cat_id);
+ERROR 1005 (HY000): Can't create table `poricchonota`.`complaint` (errno: 150 "Foreign key constraint is incorrectly formed")
+MariaDB [Poricchonota]> DESCRIBE Complaint_category;
++-------------+--------------+------+-----+---------+----------------+
+| Field       | Type         | Null | Key | Default | Extra          |
++-------------+--------------+------+-----+---------+----------------+
+| category_id | int(11)      | NO   | PRI | NULL    | auto_increment |
+| name        | varchar(100) | NO   |     | NULL    |                |
+| default_SLA | int(11)      | YES  |     | 24      |                |
+| description | text         | YES  |     | NULL    |                |
+| Ddept_id    | int(11)      | NO   | MUL | NULL    |                |
++-------------+--------------+------+-----+---------+----------------+
+5 rows in set (0.037 sec)
+
+MariaDB [Poricchonota]> USE Poricchonota;
+Database changed
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 1. Add the column (Using INT to match the parent table exactly)
+MariaDB [Poricchonota]> ALTER TABLE Complaint
+    -> ADD COLUMN cat_id INT(11);
+Query OK, 0 rows affected (0.004 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 2. Create the link (Foreign Key)
+MariaDB [Poricchonota]> ALTER TABLE Complaint
+    -> ADD CONSTRAINT fk_complaint_category
+    -> FOREIGN KEY (cat_id) REFERENCES Complaint_category(category_id);
+Query OK, 0 rows affected (0.045 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]> USE Poricchonota;
+Database changed
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 1. Add 'location' column to Complaint table
+MariaDB [Poricchonota]> ALTER TABLE Complaint ADD COLUMN location VARCHAR(255);
+Query OK, 0 rows affected (0.069 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 2. Create some sample Categories (so your dropdown isn't empty)
+MariaDB [Poricchonota]> -- We assume Department ID 1 (DNCC) and 3 (WASA) exist from your previous setup.
+MariaDB [Poricchonota]> INSERT INTO Complaint_category (name, default_SLA, Ddept_id) VALUES
+    -> ('Garbage Dump', 24, 1),
+    -> ('Blocked Drain', 48, 1),
+    -> ('Water Leakage', 12, 3),
+    -> ('Mosquito Breeding Spot', 72, 1),
+    -> ('Street Light Broken', 48, 5);
+Query OK, 5 rows affected (0.006 sec)
+Records: 5  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]> USE Poricchonota;
+Database changed
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- Optional: If you want to clear old test categories first, run this line below.
+MariaDB [Poricchonota]> -- (Only do this if you haven't submitted real complaints yet!)
+MariaDB [Poricchonota]> -- DELETE FROM Complaint_category;
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 1. WASTE MANAGEMENT (Assigned to DNCC - Dept ID 1)
+MariaDB [Poricchonota]> INSERT INTO Complaint_category (name, default_SLA, Ddept_id) VALUES
+    -> ('Garbage Dump / Pile', 24, 1),
+    -> ('Dustbins Not Cleaned', 24, 1),
+    -> ('Sweeping Not Done', 24, 1),
+    -> ('Garbage Vehicle Not Arrived', 12, 1),
+    -> ('Dead Animal(s) on Road', 12, 1),
+    -> ('Burning of Garbage in Open', 6, 1), -- High Priority (Smoke)
+    -> ('Construction Debris / Malba', 48, 1);
+Query OK, 7 rows affected (0.046 sec)
+Records: 7  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 2. WATER & SEWERAGE (Assigned to WASA - Dept ID 3)
+MariaDB [Poricchonota]> INSERT INTO Complaint_category (name, default_SLA, Ddept_id) VALUES
+    -> ('Overflow of Sewerage / Storm Water', 24, 3),
+    -> ('Overflow of Septic Tanks', 24, 3),
+    -> ('Open Manholes or Drains', 6, 3), -- Critical Safety Risk
+    -> ('Stagnant Water on Road', 48, 1); -- (Could be DNCC or WASA)
+Query OK, 4 rows affected (0.006 sec)
+Records: 4  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 3. PUBLIC TOILETS (Assigned to DNCC - Dept ID 1)
+MariaDB [Poricchonota]> INSERT INTO Complaint_category (name, default_SLA, Ddept_id) VALUES
+    -> ('Uncleaned Public Toilet', 12, 1),
+    -> ('No Electricity in Public Toilet', 24, 1),
+    -> ('No Water Supply in Public Toilet', 12, 3),
+    -> ('Blockage in Public Toilet', 12, 1);
+Query OK, 4 rows affected (0.003 sec)
+Records: 4  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 4. PUBLIC NUISANCE (Assigned to DNCC - Dept ID 1)
+MariaDB [Poricchonota]> INSERT INTO Complaint_category (name, default_SLA, Ddept_id) VALUES
+    -> ('Yellow Spot (Public Urination)', 48, 1),
+    -> ('Mosquito Breeding Spot', 72, 1);
+Query OK, 2 rows affected (0.003 sec)
+Records: 2  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]> USE Poricchonota;
+Database changed
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 1. Turn off safety checks momentarily so we can delete the categories
+MariaDB [Poricchonota]> SET FOREIGN_KEY_CHECKS = 0;
+Query OK, 0 rows affected (0.004 sec)
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 2. Wipe the table clean
+MariaDB [Poricchonota]> TRUNCATE TABLE Complaint_category;
+Query OK, 0 rows affected (0.093 sec)
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 3. Turn safety checks back on
+MariaDB [Poricchonota]> SET FOREIGN_KEY_CHECKS = 1;
+Query OK, 0 rows affected (0.001 sec)
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 4. Insert the Fresh, Clean List
+MariaDB [Poricchonota]> INSERT INTO Complaint_category (category_id, name, default_SLA, Ddept_id) VALUES
+    -> (1, 'Garbage Dump / Pile', 24, 1),
+    -> (2, 'Dustbins Not Cleaned', 24, 1),
+    -> (3, 'Sweeping Not Done', 24, 1),
+    -> (4, 'Garbage Vehicle Not Arrived', 12, 1),
+    -> (5, 'Dead Animal(s) on Road', 12, 1),
+    -> (6, 'Burning of Garbage in Open', 6, 1),
+    -> (7, 'Construction Debris / Malba', 48, 1),
+    -> (8, 'Overflow of Sewerage / Storm Water', 24, 3),
+    -> (9, 'Overflow of Septic Tanks', 24, 3),
+    -> (10, 'Open Manholes or Drains', 6, 3),
+    -> (11, 'Stagnant Water on Road', 48, 1),
+    -> (12, 'Uncleaned Public Toilet', 12, 1),
+    -> (13, 'No Electricity in Public Toilet', 24, 1),
+    -> (14, 'No Water Supply in Public Toilet', 12, 3),
+    -> (15, 'Blockage in Public Toilet', 12, 1),
+    -> (16, 'Yellow Spot (Public Urination)', 48, 1),
+    -> (17, 'Mosquito Breeding Spot', 72, 1),
+    -> (18, 'Street Light Broken', 48, 5);
+Query OK, 18 rows affected (0.010 sec)
+Records: 18  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]> USE Poricchonota;
+Database changed
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> ALTER TABLE Complaint
+    -> ADD COLUMN complaint_image VARCHAR(255) DEFAULT NULL,
+    -> ADD COLUMN latitude DECIMAL(10, 8) DEFAULT NULL,
+    -> ADD COLUMN longitude DECIMAL(11, 8) DEFAULT NULL;
+Query OK, 0 rows affected (0.140 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]> USE Poricchonota;
+Database changed
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 1. Fix the Complaint table (Time & Location & Image)
+MariaDB [Poricchonota]> ALTER TABLE Complaint
+    -> ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    -> ADD COLUMN complaint_image VARCHAR(255) DEFAULT NULL,
+    -> ADD COLUMN latitude DECIMAL(10, 8) DEFAULT NULL,
+    -> ADD COLUMN longitude DECIMAL(11, 8) DEFAULT NULL;
+ERROR 1060 (42S21): Duplicate column name 'created_at'
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 2. Ensure the Category ID types match (To prevent Foreign Key errors)
+MariaDB [Poricchonota]> ALTER TABLE Complaint MODIFY COLUMN cat_id INT(11);
+Query OK, 0 rows affected (0.032 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 3. Link the tables (If not already linked)
+MariaDB [Poricchonota]> ALTER TABLE Complaint
+    -> ADD CONSTRAINT fk_complaint_category
+    -> FOREIGN KEY (cat_id) REFERENCES Complaint_category(category_id);
+ERROR 1005 (HY000): Can't create table `poricchonota`.`complaint` (errno: 121 "Duplicate key on write or update")
+MariaDB [Poricchonota]> USE Poricchonota;
+Database changed
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 1. Drop the old constraint that is failing
+MariaDB [Poricchonota]> ALTER TABLE Complaint DROP FOREIGN KEY complaint_ibfk_2;
+Query OK, 0 rows affected (0.037 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 2. Drop the index associated with it (if it exists)
+MariaDB [Poricchonota]> -- (It's okay if this line gives a warning)
+MariaDB [Poricchonota]> DROP INDEX C_category_id ON Complaint;
+Query OK, 0 rows affected (0.014 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 3. Delete the old unused column
+MariaDB [Poricchonota]> ALTER TABLE Complaint DROP COLUMN C_category_id;
+Query OK, 0 rows affected (0.012 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]> USE Poricchonota;
+Database changed
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 1. Remove the strict rule causing the crash
+MariaDB [Poricchonota]> ALTER TABLE Complaint DROP FOREIGN KEY complaint_ibfk_3;
+Query OK, 0 rows affected (0.032 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 2. Remove the index (cleanup)
+MariaDB [Poricchonota]> -- (It is okay if this line shows a warning)
+MariaDB [Poricchonota]> DROP INDEX de_dept_id ON Complaint;
+Query OK, 0 rows affected (0.011 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 3. Delete the unused column
+MariaDB [Poricchonota]> ALTER TABLE Complaint DROP COLUMN de_dept_id;
+Query OK, 0 rows affected (0.022 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]> ALTER TABLE USER MODIFY password VARCHAR(255);
+Query OK, 0 rows affected (0.168 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]> ALTER TABLE Complaint ADD COLUMN resolution_image VARCHAR(255) DEFAULT NULL;
+Query OK, 0 rows affected (0.055 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]> ALTER TABLE Complaint ADD COLUMN resolution_remarks TEXT DEFAULT NULL;
+Query OK, 0 rows affected (0.013 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]> -- 1. Create the history table
+MariaDB [Poricchonota]> CREATE TABLE Complaint_History (
+    ->     history_id INT AUTO_INCREMENT PRIMARY KEY,
+    ->     complaint_id INT NOT NULL,
+    ->     status_from VARCHAR(50) NOT NULL,
+    ->     status_to VARCHAR(50) NOT NULL,
+    ->     changed_by_user_id INT NOT NULL, -- The engineer/admin who made the change
+    ->     changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    ->     FOREIGN KEY (complaint_id) REFERENCES Complaint(complaint_id) ON DELETE CASCADE,
+    ->     FOREIGN KEY (changed_by_user_id) REFERENCES USER(user_id)
+    -> );
+Query OK, 0 rows affected (0.097 sec)
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 2. (OPTIONAL BUT RECOMMENDED) Backfill history for existing complaints
+MariaDB [Poricchonota]> -- This creates a "Pending" history record at the time of creation for existing data.
+MariaDB [Poricchonota]> INSERT INTO Complaint_History (complaint_id, status_from, status_to, changed_by_user_id, changed_at)
+    -> SELECT complaint_id, 'N/A', 'Pending', user_id, created_at FROM Complaint;
+Query OK, 2 rows affected (0.011 sec)
+Records: 2  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]> UPDATE Complaint
+    -> SET status = 'Pending'
+    -> WHERE status = '' OR status IS NULL;
+Query OK, 0 rows affected, 2 warnings (0.007 sec)
+Rows matched: 2  Changed: 0  Warnings: 2
+
+MariaDB [Poricchonota]> ALTER TABLE Complaint
+    -> ALTER COLUMN status SET DEFAULT 'Pending';
+ERROR 1067 (42000): Invalid default value for 'status'
+MariaDB [Poricchonota]> ALTER TABLE Complaint
+    -> MODIFY COLUMN status VARCHAR(50) NOT NULL DEFAULT 'Pending';
+Query OK, 3 rows affected (0.081 sec)
+Records: 3  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]> UPDATE Complaint
+    -> SET status = 'Pending'
+    -> WHERE status = '' OR status IS NULL;
+Query OK, 2 rows affected (0.004 sec)
+Rows matched: 2  Changed: 2  Warnings: 0
+
+MariaDB [Poricchonota]> -- 1. Add a column to store the total score for sorting
+MariaDB [Poricchonota]> ALTER TABLE Complaint ADD COLUMN vote_count INT DEFAULT 0;
+Query OK, 0 rows affected (0.044 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 2. Create a table to track individual votes
+MariaDB [Poricchonota]> CREATE TABLE Complaint_Votes (
+    ->     vote_id INT AUTO_INCREMENT PRIMARY KEY,
+    ->     complaint_id INT NOT NULL,
+    ->     user_id INT NOT NULL,
+    ->     vote_type TINYINT NOT NULL, -- 1 for Upvote, -1 for Downvote
+    ->     UNIQUE KEY unique_vote (complaint_id, user_id), -- Prevents duplicate voting
+    ->     FOREIGN KEY (complaint_id) REFERENCES Complaint(complaint_id) ON DELETE CASCADE,
+    ->     FOREIGN KEY (user_id) REFERENCES USER(user_id) ON DELETE CASCADE
+    -> );
+Query OK, 0 rows affected (0.028 sec)
+
+MariaDB [Poricchonota]> -- 1. Add the missing column (if it fails, that's okay, it means it already exists)
+MariaDB [Poricchonota]> ALTER TABLE Complaint ADD COLUMN vote_count INT DEFAULT 0;
+ERROR 1060 (42S21): Duplicate column name 'vote_count'
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 2. Create the votes table (if you haven't already)
+MariaDB [Poricchonota]> CREATE TABLE IF NOT EXISTS Complaint_Votes (
+    ->     vote_id INT AUTO_INCREMENT PRIMARY KEY,
+    ->     complaint_id INT NOT NULL,
+    ->     user_id INT NOT NULL,
+    ->     vote_type TINYINT NOT NULL,
+    ->     UNIQUE KEY unique_vote (complaint_id, user_id),
+    ->     FOREIGN KEY (complaint_id) REFERENCES Complaint(complaint_id) ON DELETE CASCADE,
+    ->     FOREIGN KEY (user_id) REFERENCES USER(user_id) ON DELETE CASCADE
+    -> );
+Query OK, 0 rows affected, 1 warning (0.002 sec)
+
+MariaDB [Poricchonota]> -- 1. Allow deleting a USER to remove their Complaints automatically
+MariaDB [Poricchonota]> ALTER TABLE Complaint
+    -> DROP FOREIGN KEY complaint_ibfk_1; -- (Note: Your key name might vary, this drops the old link)
+Query OK, 0 rows affected (0.026 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> ALTER TABLE Complaint
+    -> ADD CONSTRAINT fk_user_complaint
+    -> FOREIGN KEY (user_id) REFERENCES USER(user_id) ON DELETE CASCADE;
+Query OK, 3 rows affected (0.062 sec)
+Records: 3  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 2. Allow deleting a COMPLAINT to remove History/Votes automatically
+MariaDB [Poricchonota]> -- (We assume you created these tables recently, but let's ensure they cascade)
+MariaDB [Poricchonota]> ALTER TABLE Complaint_History
+    -> DROP FOREIGN KEY complaint_history_ibfk_1;
+Query OK, 0 rows affected (0.007 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> ALTER TABLE Complaint_History
+    -> ADD CONSTRAINT fk_history_complaint
+    -> FOREIGN KEY (complaint_id) REFERENCES Complaint(complaint_id) ON DELETE CASCADE;
+Query OK, 4 rows affected (0.035 sec)
+Records: 4  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> ALTER TABLE Complaint_Votes
+    -> ADD CONSTRAINT fk_votes_complaint
+    -> FOREIGN KEY (complaint_id) REFERENCES Complaint(complaint_id) ON DELETE CASCADE;
+Query OK, 2 rows affected (0.048 sec)
+Records: 2  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]> -- Add the department column to Users (if not exists)
+MariaDB [Poricchonota]> ALTER TABLE USER ADD COLUMN dept_id INT DEFAULT 0;
+Query OK, 0 rows affected (0.029 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- Update your Engineer user to belong to a category (e.g., Category 1)
+MariaDB [Poricchonota]> -- Replace 'admin@wasa.gov.bd' with your engineer's email if different
+MariaDB [Poricchonota]> UPDATE USER SET dept_id = 1 WHERE role = 'engineer';
+Query OK, 4 rows affected (0.008 sec)
+Rows matched: 4  Changed: 4  Warnings: 0
+
+MariaDB [Poricchonota]> -- 1. Make sure the Category table has a department column
+MariaDB [Poricchonota]> ALTER TABLE Complaint_category ADD COLUMN dept_id INT;
+Query OK, 0 rows affected (0.030 sec)
+Records: 0  Duplicates: 0  Warnings: 0
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 2. Link Categories to Departments
+MariaDB [Poricchonota]> -- (Adjust the IDs based on your actual Department IDs)
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- Example: If "WASA" (Water) is dept_id = 1
+MariaDB [Poricchonota]> UPDATE Complaint_category SET dept_id = 1 WHERE name LIKE '%Water%';
+Query OK, 3 rows affected (0.006 sec)
+Rows matched: 3  Changed: 3  Warnings: 0
+
+MariaDB [Poricchonota]> UPDATE Complaint_category SET dept_id = 1 WHERE name LIKE '%Pipe%';
+Query OK, 0 rows affected (0.000 sec)
+Rows matched: 0  Changed: 0  Warnings: 0
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- Example: If "City Corp" (Waste/Roads) is dept_id = 2
+MariaDB [Poricchonota]> UPDATE Complaint_category SET dept_id = 2 WHERE name LIKE '%Waste%';
+Query OK, 0 rows affected (0.000 sec)
+Rows matched: 0  Changed: 0  Warnings: 0
+
+MariaDB [Poricchonota]> UPDATE Complaint_category SET dept_id = 2 WHERE name LIKE '%Garbage%';
+Query OK, 3 rows affected (0.001 sec)
+Rows matched: 3  Changed: 3  Warnings: 0
+
+MariaDB [Poricchonota]> UPDATE Complaint_category SET dept_id = 2 WHERE name LIKE '%Road%';
+Query OK, 2 rows affected (0.001 sec)
+Rows matched: 2  Changed: 2  Warnings: 0
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- Example: If "DESCO" (Electricity) is dept_id = 3
+MariaDB [Poricchonota]> UPDATE Complaint_category SET dept_id = 3 WHERE name LIKE '%Electric%';
+Query OK, 1 row affected (0.001 sec)
+Rows matched: 1  Changed: 1  Warnings: 0
+
+MariaDB [Poricchonota]> -- Link any category containing "Light" (like "Broken Street Light") to Dept ID 3
+MariaDB [Poricchonota]> UPDATE Complaint_category
+    -> SET dept_id = 3
+    -> WHERE name LIKE '%Light%' OR name LIKE '%Lamp%';
+Query OK, 1 row affected (0.021 sec)
+Rows matched: 1  Changed: 1  Warnings: 0
+
+MariaDB [Poricchonota]> SELECT user_id, name, email, role, dept_id FROM USER WHERE role = 'engineer';
++---------+--------------------+-------------------+----------+---------+
+| user_id | name               | email             | role     | dept_id |
++---------+--------------------+-------------------+----------+---------+
+|       3 | Sadman Zarif Kazmi | Kazmi@gmail.com   | engineer |       1 |
+|       6 | Wasif Islam        | Wasif@gmail.com   | engineer |       1 |
+|       8 | Ishmum Bin Rofi    | ishmum@gmail.com  | engineer |       1 |
+|       9 | Rafi               | rafi@gmail.com    | engineer |       1 |
+|      10 | Kushari            | kushari@gmail.com | engineer |       0 |
++---------+--------------------+-------------------+----------+---------+
+5 rows in set (0.047 sec)
+
+MariaDB [Poricchonota]> -- Replace '3' with the correct Department ID (e.g. 1=WASA, 2=City Corp, 3=DESCO)
+MariaDB [Poricchonota]> UPDATE USER
+    -> SET dept_id = 3
+    -> WHERE role = 'engineer' AND dept_id IS NULL;
+ERROR 2006 (HY000): MySQL server has gone away
+No connection. Trying to reconnect...
+Connection id:    1058
+Current database: Poricchonota
+
+Query OK, 0 rows affected (0.103 sec)
+Rows matched: 0  Changed: 0  Warnings: 0
+
+MariaDB [Poricchonota]> -- Replace '3' with the correct Department ID (e.g. 1=WASA, 2=City Corp, 3=DESCO)
+MariaDB [Poricchonota]> UPDATE USER
+    -> SET dept_id = 3
+    -> WHERE role = 'engineer' AND dept_id IS NULL;
+Query OK, 0 rows affected (0.029 sec)
+Rows matched: 0  Changed: 0  Warnings: 0
+
+MariaDB [Poricchonota]> SELECT
+    ->     u.name AS Engineer_Name,
+    ->     u.dept_id AS Eng_Dept_ID,
+    ->     c.description AS Complaint,
+    ->     cat.name AS Category,
+    ->     cat.Ddept_id AS Category_Dept_ID  -- Change to cat.dept_id if needed
+    -> FROM USER u
+    -> JOIN Complaint_category cat ON u.dept_id = cat.Ddept_id -- Change to cat.dept_id if needed
+    -> JOIN Complaint c ON c.cat_id = cat.category_id
+    -> WHERE u.role = 'engineer';
++--------------------+-------------+-----------------------------------+---------------------------------+------------------+
+| Engineer_Name      | Eng_Dept_ID | Complaint                         | Category                        | Category_Dept_ID |
++--------------------+-------------+-----------------------------------+---------------------------------+------------------+
+| Sadman Zarif Kazmi |           1 | Very unclean indeed               | Uncleaned Public Toilet         |                1 |
+| Sadman Zarif Kazmi |           1 | Lack of electric light so it dark | No Electricity in Public Toilet |                1 |
+| Sadman Zarif Kazmi |           1 | Hhdishd                           | No Electricity in Public Toilet |                1 |
+| Wasif Islam        |           1 | Very unclean indeed               | Uncleaned Public Toilet         |                1 |
+| Wasif Islam        |           1 | Lack of electric light so it dark | No Electricity in Public Toilet |                1 |
+| Wasif Islam        |           1 | Hhdishd                           | No Electricity in Public Toilet |                1 |
+| Ishmum Bin Rofi    |           1 | Very unclean indeed               | Uncleaned Public Toilet         |                1 |
+| Ishmum Bin Rofi    |           1 | Lack of electric light so it dark | No Electricity in Public Toilet |                1 |
+| Ishmum Bin Rofi    |           1 | Hhdishd                           | No Electricity in Public Toilet |                1 |
+| Rafi               |           1 | Very unclean indeed               | Uncleaned Public Toilet         |                1 |
+| Rafi               |           1 | Lack of electric light so it dark | No Electricity in Public Toilet |                1 |
+| Rafi               |           1 | Hhdishd                           | No Electricity in Public Toilet |                1 |
++--------------------+-------------+-----------------------------------+---------------------------------+------------------+
+12 rows in set (0.010 sec)
+
+MariaDB [Poricchonota]> SELECT user_id, name, role, dept_id FROM USER WHERE name LIKE '%Kushari%';
++---------+---------+----------+---------+
+| user_id | name    | role     | dept_id |
++---------+---------+----------+---------+
+|      10 | Kushari | engineer |       0 |
++---------+---------+----------+---------+
+1 row in set (0.006 sec)
+
+MariaDB [Poricchonota]> Select * from department;
++---------+------------------------------+-------------+------------------------------+------------+
+| dept_id | name                         | contact     | off_address                  | short_code |
++---------+------------------------------+-------------+------------------------------+------------+
+|       1 | Dhaka North City Corporation | 16106       | Gulshan-2, Dhaka             | DNCC       |
+|       2 | Dhaka South City Corporation | 09611100097 | Nagar Bhaban, Dhaka          | DSCC       |
+|       3 | Dhaka WASA                   | 16162       | Kawran Bazar, Dhaka          | WASA       |
+|       4 | Titas Gas                    | 16496       | Kazi Nazrul Islam Ave, Dhaka | TITAS      |
+|       5 | DESCO                        | 16120       | Nikunja-2, Dhaka             | DESCO      |
++---------+------------------------------+-------------+------------------------------+------------+
+5 rows in set (0.001 sec)
+
+MariaDB [Poricchonota]> select * from users;
+ERROR 1146 (42S02): Table 'poricchonota.users' doesn't exist
+MariaDB [Poricchonota]> select * from user;
++---------+--------------+--------------------+---------------------------+--------------------------------------------------------------+--------------+----------+---------------------+---------+
+| user_id | nid          | name               | email                     | password                                                     | phone        | role     | created_at          | dept_id |
++---------+--------------+--------------------+---------------------------+--------------------------------------------------------------+--------------+----------+---------------------+---------+
+|       1 | 111111111111 | Adittya Kumar      | adittyakumar671@gmail.com | $2y$10$yphTPn25q04kwS/djFVuR.DDwB.Lu0aeF9Vkw/UviLeoe53m7lnIO | 011111111111 | citizen  | 2025-12-20 00:36:47 |       0 |
+|       2 | 222222222    | Usaeed Rahman      | Usaeed@gmail.com          | $2y$10$b7vtjrx1q0EfaKBNLmeYLuRQb273etzilETK4gK0OApPtPU8OBf8O | 012222222    | admin    | 2025-12-20 00:59:57 |       0 |
+|       3 | 3333333333   | Sadman Zarif Kazmi | Kazmi@gmail.com           | $2y$10$c/PSceK1g6Rj9toDcd.IWObd.PBljO5F3tYHmWf33XCJ8waNCXB72 | 3333333333   | engineer | 2025-12-20 01:00:39 |       1 |
+|       4 | 44444444444  | Safin Ahmed Tonmoy | Safin@gmail.com           | $2y$10$XyE4UFtmBe51sYAJKlVXdeu3FOc69xXdNVGh2zys.fcg3EMUkZIlC | 444444444444 | citizen  | 2025-12-20 02:35:09 |       0 |
+|       5 | 66666666666  | Ishrak Bhuiyan     | Ishrak@gmail.com          | $2y$10$BzAXbSN7Ez62KEFcIpr5...bxcoGAM9nUzqxj9K/M5Il0PMt5RYLm | 66666666666  | admin    | 2025-12-20 02:49:38 |       0 |
+|       6 | 77777777777  | Wasif Islam        | Wasif@gmail.com           | $2y$10$5WutRo5MuqWPicTfDOC8/OCUtUIRrrT4I1mAMs4Rgg7Yu.NKaZSUO | 7777777777   | engineer | 2025-12-20 02:50:07 |       1 |
+|       7 | 88888888888  | Nazmus Sakib       | nazmus@gmail.com          | $2y$10$kAA0N30zqZJG.FF5Ew1Ph.i06ghLIaPsNuWTtLpiT9O2CNovCyoze | 88888888888  | admin    | 2025-12-20 05:49:10 |       0 |
+|       8 | 9999999999   | Ishmum Bin Rofi    | ishmum@gmail.com          | $2y$10$c.oj3sVKCe9A0psnn4Q0F.x4akCqd4ZkykXtgMCMXyA/w6trV054q | 999999999    | engineer | 2025-12-20 05:50:01 |       1 |
+|       9 | 10000000000  | Rafi               | rafi@gmail.com            | $2y$10$nzlR0ivMZbKLhiPbuqfb3eKOZ07SmdexQkXvE5p.DatODeZiKQAIu | 1000000000   | engineer | 2025-12-20 05:52:24 |       1 |
+|      10 | 56455        | Kushari            | kushari@gmail.com         | $2y$10$BQv2/kxyIzZv7WbqWiskOe9Z4NuN5XWGwXRktAO8fHPRy1CyhKDYm | 554646       | engineer | 2025-12-20 06:07:58 |       0 |
++---------+--------------+--------------------+---------------------------+--------------------------------------------------------------+--------------+----------+---------------------+---------+
+10 rows in set (0.001 sec)
+
+MariaDB [Poricchonota]> -- 1. Assign WASIF to DESCO (Electricity)
+MariaDB [Poricchonota]> UPDATE USER SET dept_id = 5 WHERE user_id = 6;
+Query OK, 1 row affected (0.027 sec)
+Rows matched: 1  Changed: 1  Warnings: 0
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 2. Assign SADMAN to WASA (Water)
+MariaDB [Poricchonota]> UPDATE USER SET dept_id = 3 WHERE user_id = 3;
+Query OK, 1 row affected (0.003 sec)
+Rows matched: 1  Changed: 1  Warnings: 0
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 3. Assign RAFI to TITAS GAS
+MariaDB [Poricchonota]> UPDATE USER SET dept_id = 4 WHERE user_id = 9;
+Query OK, 1 row affected (0.002 sec)
+Rows matched: 1  Changed: 1  Warnings: 0
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 4. Assign ISHMUM to DNCC (North City Corp)
+MariaDB [Poricchonota]> UPDATE USER SET dept_id = 1 WHERE user_id = 8;
+Query OK, 0 rows affected (0.000 sec)
+Rows matched: 1  Changed: 0  Warnings: 0
+
+MariaDB [Poricchonota]>
+MariaDB [Poricchonota]> -- 5. Assign KUSHARI to DSCC (South City Corp)
+MariaDB [Poricchonota]> -- (He was previously 0, now he is fixed)
+MariaDB [Poricchonota]> UPDATE USER SET dept_id = 2 WHERE user_id = 10;
+Query OK, 1 row affected (0.003 sec)
+Rows matched: 1  Changed: 1  Warnings: 0
+
+MariaDB [Poricchonota]> SELECT
+    ->     TABLE_NAME AS 'Table',
+    ->     COLUMN_NAME AS 'Foreign Key Column',
+    ->     REFERENCED_TABLE_NAME AS 'Linked To Table',
+    ->     REFERENCED_COLUMN_NAME AS 'Linked To Column',
+    ->     CONSTRAINT_NAME AS 'Constraint Name'
+    -> FROM
+    ->     INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+    -> WHERE
+    ->     REFERENCED_TABLE_SCHEMA = DATABASE()
+    ->     AND REFERENCED_TABLE_NAME IS NOT NULL;
++--------------------+----------------------+--------------------+------------------+---------------------------+
+| Table              | Foreign Key Column   | Linked To Table    | Linked To Column | Constraint Name           |
++--------------------+----------------------+--------------------+------------------+---------------------------+
+| admin              | user_id              | staff              | user_id          | admin_ibfk_1              |
+| admin              | dept_id              | department         | dept_id          | admin_ibfk_2              |
+| citizen            | user_id              | user               | user_id          | citizen_ibfk_1            |
+| complaint          | assigned_engineer_id | user               | user_id          | complaint_ibfk_4          |
+| complaint          | cat_id               | complaint_category | category_id      | fk_complaint_category     |
+| complaint          | user_id              | user               | user_id          | fk_user_complaint         |
+| complaint_category | Ddept_id             | department         | dept_id          | complaint_category_ibfk_1 |
+| complaint_history  | changed_by_user_id   | user               | user_id          | complaint_history_ibfk_2  |
+| complaint_history  | complaint_id         | complaint          | Complaint_id     | fk_history_complaint      |
+| complaint_update   | Complaint_id         | complaint          | Complaint_id     | complaint_update_ibfk_1   |
+| complaint_update   | user_id              | user               | user_id          | complaint_update_ibfk_2   |
+| complaint_votes    | complaint_id         | complaint          | Complaint_id     | complaint_votes_ibfk_1    |
+| complaint_votes    | user_id              | user               | user_id          | complaint_votes_ibfk_2    |
+| complaint_votes    | complaint_id         | complaint          | Complaint_id     | fk_votes_complaint        |
+| engineer           | user_id              | staff              | user_id          | engineer_ibfk_1           |
+| engineer           | dept_id              | department         | dept_id          | engineer_ibfk_2           |
+| staff              | user_id              | user               | user_id          | staff_ibfk_1              |
++--------------------+----------------------+--------------------+------------------+---------------------------+
+17 rows in set (0.658 sec)
+
+MariaDB [Poricchonota]> SELECT
+    ->     TABLE_NAME,
+    ->     COLUMN_NAME,
+    ->     COLUMN_TYPE,
+    ->     IS_NULLABLE,
+    ->     COLUMN_KEY AS 'Key Type (PRI/MUL)',
+    ->     EXTRA AS 'Auto Increment?'
+    -> FROM
+    ->     INFORMATION_SCHEMA.COLUMNS
+    -> WHERE
+    ->     TABLE_SCHEMA = DATABASE()
+    -> ORDER BY
+    ->     TABLE_NAME, ORDINAL_POSITION;
++--------------------+----------------------+------------------------------------+-------------+--------------------+-----------------+
+| TABLE_NAME         | COLUMN_NAME          | COLUMN_TYPE                        | IS_NULLABLE | Key Type (PRI/MUL) | Auto Increment? |
++--------------------+----------------------+------------------------------------+-------------+--------------------+-----------------+
+| admin              | user_id              | int(11)                            | NO          | PRI                |                 |
+| admin              | dept_id              | int(11)                            | NO          | MUL                |                 |
+| citizen            | user_id              | int(11)                            | NO          | PRI                |                 |
+| citizen            | city                 | varchar(100)                       | YES         |                    |                 |
+| citizen            | address              | text                               | YES         |                    |                 |
+| complaint          | Complaint_id         | int(11)                            | NO          | PRI                | auto_increment  |
+| complaint          | user_id              | int(11)                            | NO          | MUL                |                 |
+| complaint          | assigned_engineer_id | int(11)                            | YES         | MUL                |                 |
+| complaint          | title                | varchar(150)                       | NO          |                    |                 |
+| complaint          | description          | text                               | NO          |                    |                 |
+| complaint          | location_text        | text                               | NO          |                    |                 |
+| complaint          | before_photo         | varchar(255)                       | YES         |                    |                 |
+| complaint          | status               | varchar(50)                        | NO          |                    |                 |
+| complaint          | reported_at          | timestamp                          | NO          |                    |                 |
+| complaint          | deadline             | datetime                           | YES         |                    |                 |
+| complaint          | created_at           | timestamp                          | NO          |                    |                 |
+| complaint          | cat_id               | int(11)                            | YES         | MUL                |                 |
+| complaint          | location             | varchar(255)                       | YES         |                    |                 |
+| complaint          | complaint_image      | varchar(255)                       | YES         |                    |                 |
+| complaint          | latitude             | decimal(10,8)                      | YES         |                    |                 |
+| complaint          | longitude            | decimal(11,8)                      | YES         |                    |                 |
+| complaint          | resolution_image     | varchar(255)                       | YES         |                    |                 |
+| complaint          | resolution_remarks   | text                               | YES         |                    |                 |
+| complaint          | vote_count           | int(11)                            | YES         |                    |                 |
+| complaint_category | category_id          | int(11)                            | NO          | PRI                | auto_increment  |
+| complaint_category | name                 | varchar(100)                       | NO          |                    |                 |
+| complaint_category | default_SLA          | int(11)                            | YES         |                    |                 |
+| complaint_category | description          | text                               | YES         |                    |                 |
+| complaint_category | Ddept_id             | int(11)                            | NO          | MUL                |                 |
+| complaint_category | dept_id              | int(11)                            | YES         |                    |                 |
+| complaint_history  | history_id           | int(11)                            | NO          | PRI                | auto_increment  |
+| complaint_history  | complaint_id         | int(11)                            | NO          | MUL                |                 |
+| complaint_history  | status_from          | varchar(50)                        | NO          |                    |                 |
+| complaint_history  | status_to            | varchar(50)                        | NO          |                    |                 |
+| complaint_history  | changed_by_user_id   | int(11)                            | NO          | MUL                |                 |
+| complaint_history  | changed_at           | timestamp                          | NO          |                    |                 |
+| complaint_update   | Update_ID            | int(11)                            | NO          | PRI                | auto_increment  |
+| complaint_update   | Complaint_id         | int(11)                            | NO          | MUL                |                 |
+| complaint_update   | user_id              | int(11)                            | NO          | MUL                |                 |
+| complaint_update   | old_status           | varchar(50)                        | YES         |                    |                 |
+| complaint_update   | new_status           | varchar(50)                        | YES         |                    |                 |
+| complaint_update   | comment              | text                               | YES         |                    |                 |
+| complaint_update   | photo_path           | varchar(255)                       | YES         |                    |                 |
+| complaint_update   | Created_at           | timestamp                          | NO          |                    |                 |
+| complaint_votes    | vote_id              | int(11)                            | NO          | PRI                | auto_increment  |
+| complaint_votes    | complaint_id         | int(11)                            | NO          | MUL                |                 |
+| complaint_votes    | user_id              | int(11)                            | NO          | MUL                |                 |
+| complaint_votes    | vote_type            | tinyint(4)                         | NO          |                    |                 |
+| department         | dept_id              | int(11)                            | NO          | PRI                | auto_increment  |
+| department         | name                 | varchar(100)                       | NO          | UNI                |                 |
+| department         | contact              | varchar(50)                        | YES         |                    |                 |
+| department         | off_address          | text                               | YES         |                    |                 |
+| department         | short_code           | varchar(20)                        | YES         | UNI                |                 |
+| engineer           | user_id              | int(11)                            | NO          | PRI                |                 |
+| engineer           | dept_id              | int(11)                            | NO          | MUL                |                 |
+| engineer           | is_active            | tinyint(1)                         | YES         |                    |                 |
+| staff              | user_id              | int(11)                            | NO          | PRI                |                 |
+| staff              | joined_at            | date                               | YES         |                    |                 |
+| user               | user_id              | int(11)                            | NO          | PRI                | auto_increment  |
+| user               | nid                  | varchar(50)                        | NO          | UNI                |                 |
+| user               | name                 | varchar(100)                       | NO          |                    |                 |
+| user               | email                | varchar(150)                       | NO          | UNI                |                 |
+| user               | password             | varchar(255)                       | YES         |                    |                 |
+| user               | phone                | varchar(20)                        | YES         |                    |                 |
+| user               | role                 | enum('citizen','admin','engineer') | NO          |                    |                 |
+| user               | created_at           | timestamp                          | NO          |                    |                 |
+| user               | dept_id              | int(11)                            | YES         |                    |                 |
++--------------------+----------------------+------------------------------------+-------------+--------------------+-----------------+
+67 rows in set (0.018 sec)
+
+MariaDB [Poricchonota]> SELECT
+    ->     TABLE_NAME,
+    ->     TABLE_ROWS AS 'Approx Row Count',
+    ->     ROUND((DATA_LENGTH + INDEX_LENGTH) / 1024 / 1024, 2) AS 'Size (MB)'
+    -> FROM
+    ->     INFORMATION_SCHEMA.TABLES
+    -> WHERE
+    ->     TABLE_SCHEMA = DATABASE();
++--------------------+------------------+-----------+
+| TABLE_NAME         | Approx Row Count | Size (MB) |
++--------------------+------------------+-----------+
+| admin              |                3 |      0.03 |
+| citizen            |                2 |      0.02 |
+| complaint          |                5 |      0.06 |
+| complaint_category |               18 |      0.03 |
+| complaint_history  |               12 |      0.05 |
+| complaint_update   |                0 |      0.05 |
+| complaint_votes    |                4 |      0.05 |
+| department         |                5 |      0.05 |
+| engineer           |                5 |      0.03 |
+| staff              |                8 |      0.02 |
+| user               |               11 |      0.05 |
++--------------------+------------------+-----------+
+11 rows in set (0.003 sec)
+
+MariaDB [Poricchonota]>
